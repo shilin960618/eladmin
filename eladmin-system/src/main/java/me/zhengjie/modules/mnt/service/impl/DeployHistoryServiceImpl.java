@@ -1,22 +1,33 @@
+/*
+ *  Copyright 2019-2020 Zheng Jie
+ *
+ *  Licensed under the Apache License, Version 2.0 (the "License");
+ *  you may not use this file except in compliance with the License.
+ *  You may obtain a copy of the License at
+ *
+ *  http://www.apache.org/licenses/LICENSE-2.0
+ *
+ *  Unless required by applicable law or agreed to in writing, software
+ *  distributed under the License is distributed on an "AS IS" BASIS,
+ *  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ *  See the License for the specific language governing permissions and
+ *  limitations under the License.
+ */
 package me.zhengjie.modules.mnt.service.impl;
 
 import cn.hutool.core.util.IdUtil;
+import lombok.RequiredArgsConstructor;
 import me.zhengjie.modules.mnt.domain.DeployHistory;
 import me.zhengjie.modules.mnt.repository.DeployHistoryRepository;
 import me.zhengjie.modules.mnt.service.DeployHistoryService;
 import me.zhengjie.modules.mnt.service.dto.DeployHistoryDto;
 import me.zhengjie.modules.mnt.service.dto.DeployHistoryQueryCriteria;
-import me.zhengjie.modules.mnt.service.mapper.DeployHistoryMapper;
-import me.zhengjie.utils.FileUtil;
-import me.zhengjie.utils.PageUtil;
-import me.zhengjie.utils.QueryHelp;
-import me.zhengjie.utils.ValidationUtil;
+import me.zhengjie.modules.mnt.service.mapstruct.DeployHistoryMapper;
+import me.zhengjie.utils.*;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.stereotype.Service;
-import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
-
 import javax.servlet.http.HttpServletResponse;
 import java.io.IOException;
 import java.util.*;
@@ -26,20 +37,14 @@ import java.util.*;
 * @date 2019-08-24
 */
 @Service
-@Transactional(propagation = Propagation.SUPPORTS, readOnly = true, rollbackFor = Exception.class)
+@RequiredArgsConstructor
 public class DeployHistoryServiceImpl implements DeployHistoryService {
 
     private final DeployHistoryRepository deployhistoryRepository;
-
     private final DeployHistoryMapper deployhistoryMapper;
 
-    public DeployHistoryServiceImpl(DeployHistoryRepository deployhistoryRepository, DeployHistoryMapper deployhistoryMapper) {
-        this.deployhistoryRepository = deployhistoryRepository;
-        this.deployhistoryMapper = deployhistoryMapper;
-    }
-
     @Override
-    public Object queryAll(DeployHistoryQueryCriteria criteria, Pageable pageable){
+    public PageResult<DeployHistoryDto> queryAll(DeployHistoryQueryCriteria criteria, Pageable pageable){
         Page<DeployHistory> page = deployhistoryRepository.findAll((root, criteriaQuery, criteriaBuilder) -> QueryHelp.getPredicate(root,criteria,criteriaBuilder),pageable);
         return PageUtil.toPage(page.map(deployhistoryMapper::toDto));
     }
@@ -58,9 +63,9 @@ public class DeployHistoryServiceImpl implements DeployHistoryService {
 
     @Override
     @Transactional(rollbackFor = Exception.class)
-    public DeployHistoryDto create(DeployHistory resources) {
+    public void create(DeployHistory resources) {
         resources.setId(IdUtil.simpleUUID());
-        return deployhistoryMapper.toDto(deployhistoryRepository.save(resources));
+        deployhistoryRepository.save(resources);
     }
 
     @Override

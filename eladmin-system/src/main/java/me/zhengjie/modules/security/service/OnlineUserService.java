@@ -1,98 +1,101 @@
+/*
+ *  Copyright 2019-2020 Zheng Jie
+ *
+ *  Licensed under the Apache License, Version 2.0 (the "License");
+ *  you may not use this file except in compliance with the License.
+ *  You may obtain a copy of the License at
+ *
+ *  http://www.apache.org/licenses/LICENSE-2.0
+ *
+ *  Unless required by applicable law or agreed to in writing, software
+ *  distributed under the License is distributed on an "AS IS" BASIS,
+ *  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ *  See the License for the specific language governing permissions and
+ *  limitations under the License.
+ */
 package me.zhengjie.modules.security.service;
 
+import lombok.AllArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import me.zhengjie.modules.security.config.SecurityProperties;
-import me.zhengjie.modules.security.security.vo.JwtUser;
-import me.zhengjie.modules.security.security.vo.OnlineUser;
+import me.zhengjie.modules.security.security.TokenProvider;
+import me.zhengjie.utils.PageResult;
+import me.zhengjie.modules.security.config.bean.SecurityProperties;
+import me.zhengjie.modules.security.service.dto.JwtUserDto;
+import me.zhengjie.modules.security.service.dto.OnlineUserDto;
 import me.zhengjie.utils.*;
 import org.springframework.data.domain.Pageable;
+import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Service;
 import javax.servlet.http.HttpServletRequest;
 import javax.servlet.http.HttpServletResponse;
 import java.io.IOException;
 import java.util.*;
+import java.util.concurrent.TimeUnit;
 
 /**
  * @author Zheng Jie
- * @Date 2019年10月26日21:56:27
+ * @date 2019年10月26日21:56:27
  */
 @Service
 @Slf4j
+@AllArgsConstructor
 public class OnlineUserService {
 
     private final SecurityProperties properties;
-    private RedisUtils redisUtils;
-
-    public OnlineUserService(SecurityProperties properties, RedisUtils redisUtils) {
-        this.properties = properties;
-        this.redisUtils = redisUtils;
-    }
+    private final TokenProvider tokenProvider;
+    private final RedisUtils redisUtils;
 
     /**
      * 保存在线用户信息
-     * @param jwtUser /
+     * @param jwtUserDto /
      * @param token /
      * @param request /
      */
-    public void save(JwtUser jwtUser, String token, HttpServletRequest request){
-        String job = jwtUser.getDept() + "/" + jwtUser.getJob();
+    public void save(JwtUserDto jwtUserDto, String token, HttpServletRequest request){
+        String dept = jwtUserDto.getUser().getDept().getName();
         String ip = StringUtils.getIp(request);
         String browser = StringUtils.getBrowser(request);
         String address = StringUtils.getCityInfo(ip);
-        OnlineUser onlineUser = null;
+        OnlineUserDto onlineUserDto = null;
         try {
-            onlineUser = new OnlineUser(jwtUser.getUsername(), jwtUser.getNickName(), job, browser , ip, address, EncryptUtils.desEncrypt(token), new Date());
+            onlineUserDto = new OnlineUserDto(jwtUserDto.getUsername(), jwtUserDto.getUser().getNickName(), dept, browser , ip, address, EncryptUtils.desEncrypt(token), new Date());
         } catch (Exception e) {
-            e.printStackTrace();
+            log.error(e.getMessage(),e);
         }
-        redisUtils.set(properties.getOnlineKey() + token, onlineUser, properties.getTokenValidityInSeconds()/1000);
+        String loginKey = tokenProvider.loginKey(token);
+        redisUtils.set(loginKey, onlineUserDto, properties.getTokenValidityInSeconds(), TimeUnit.MILLISECONDS);
     }
 
     /**
      * 查询全部数据
-     * @param filter /
+     * @param username /
      * @param pageable /
      * @return /
      */
-    public Map<String,Object> getAll(String filter, Pageable pageable){
-        List<OnlineUser> onlineUsers = getAll(filter);
+    public PageResult<OnlineUserDto> getAll(String username, Pageable pageable){
+        List<OnlineUserDto> onlineUserDtos = getAll(username);
         return PageUtil.toPage(
-                PageUtil.toPage(pageable.getPageNumber(),pageable.getPageSize(),onlineUsers),
-                onlineUsers.size()
+                PageUtil.paging(pageable.getPageNumber(),pageable.getPageSize(), onlineUserDtos),
+                onlineUserDtos.size()
         );
     }
 
     /**
      * 查询全部数据，不分页
-     * @param filter /
+     * @param username /
      * @return /
      */
-    public List<OnlineUser> getAll(String filter){
-        List<String> keys = redisUtils.scan(properties.getOnlineKey() + "*");
+    public List<OnlineUserDto> getAll(String username){
+        String loginKey = properties.getOnlineKey() +
+                (StringUtils.isBlank(username) ? "" : "*" + username);
+        List<String> keys = redisUtils.scan(loginKey + "*");
         Collections.reverse(keys);
-        List<OnlineUser> onlineUsers = new ArrayList<>();
+        List<OnlineUserDto> onlineUserDtos = new ArrayList<>();
         for (String key : keys) {
-            OnlineUser onlineUser = (OnlineUser) redisUtils.get(key);
-            if(StringUtils.isNotBlank(filter)){
-                if(onlineUser.toString().contains(filter)){
-                    onlineUsers.add(onlineUser);
-                }
-            } else {
-                onlineUsers.add(onlineUser);
-            }
+            onlineUserDtos.add((OnlineUserDto) redisUtils.get(key));
         }
-        onlineUsers.sort((o1, o2) -> o2.getLoginTime().compareTo(o1.getLoginTime()));
-        return onlineUsers;
-    }
-
-    /**
-     * 踢出用户
-     * @param key /
-     * @throws Exception /
-     */
-    public void kickOut(String key) throws Exception {
-        key = properties.getOnlineKey() + EncryptUtils.desDecrypt(key);
-        redisUtils.del(key);
+        onlineUserDtos.sort((o1, o2) -> o2.getLoginTime().compareTo(o1.getLoginTime()));
+        return onlineUserDtos;
     }
 
     /**
@@ -100,8 +103,8 @@ public class OnlineUserService {
      * @param token /
      */
     public void logout(String token) {
-        String key = properties.getOnlineKey() + token;
-        redisUtils.del(key);
+        String loginKey = tokenProvider.loginKey(token);
+        redisUtils.del(loginKey);
     }
 
     /**
@@ -110,12 +113,12 @@ public class OnlineUserService {
      * @param response /
      * @throws IOException /
      */
-    public void download(List<OnlineUser> all, HttpServletResponse response) throws IOException {
+    public void download(List<OnlineUserDto> all, HttpServletResponse response) throws IOException {
         List<Map<String, Object>> list = new ArrayList<>();
-        for (OnlineUser user : all) {
+        for (OnlineUserDto user : all) {
             Map<String,Object> map = new LinkedHashMap<>();
             map.put("用户名", user.getUserName());
-            map.put("岗位", user.getJob());
+            map.put("部门", user.getDept());
             map.put("登录IP", user.getIp());
             map.put("登录地点", user.getAddress());
             map.put("浏览器", user.getBrowser());
@@ -130,33 +133,17 @@ public class OnlineUserService {
      * @param key /
      * @return /
      */
-    public OnlineUser getOne(String key) {
-        return (OnlineUser)redisUtils.get(key);
+    public OnlineUserDto getOne(String key) {
+        return (OnlineUserDto)redisUtils.get(key);
     }
 
     /**
-     * 检测用户是否在之前已经登录，已经登录踢下线
-     * @param userName 用户名
+     * 根据用户名强退用户
+     * @param username /
      */
-    public void checkLoginOnUser(String userName, String igoreToken){
-        List<OnlineUser> onlineUsers = getAll(userName);
-        if(onlineUsers ==null || onlineUsers.isEmpty()){
-            return;
-        }
-        for(OnlineUser onlineUser:onlineUsers){
-            if(onlineUser.getUserName().equals(userName)){
-                try {
-                    String token =EncryptUtils.desDecrypt(onlineUser.getKey());
-                    if(StringUtils.isNotBlank(igoreToken)&&!igoreToken.equals(token)){
-                        this.kickOut(onlineUser.getKey());
-                    }else if(StringUtils.isBlank(igoreToken)){
-                        this.kickOut(onlineUser.getKey());
-                    }
-                } catch (Exception e) {
-                    log.error("checkUser is error",e);
-                }
-            }
-        }
+    @Async
+    public void kickOutForUsername(String username) {
+        String loginKey = properties.getOnlineKey() + username + "*";
+        redisUtils.scanDel(loginKey);
     }
-
 }

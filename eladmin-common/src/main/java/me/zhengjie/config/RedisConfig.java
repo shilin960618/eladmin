@@ -1,3 +1,18 @@
+/*
+ *  Copyright 2019-2020 Zheng Jie
+ *
+ *  Licensed under the Apache License, Version 2.0 (the "License");
+ *  you may not use this file except in compliance with the License.
+ *  You may obtain a copy of the License at
+ *
+ *  http://www.apache.org/licenses/LICENSE-2.0
+ *
+ *  Unless required by applicable law or agreed to in writing, software
+ *  distributed under the License is distributed on an "AS IS" BASIS,
+ *  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ *  See the License for the specific language governing permissions and
+ *  limitations under the License.
+ */
 package me.zhengjie.config;
 
 import cn.hutool.core.lang.Assert;
@@ -5,7 +20,6 @@ import com.alibaba.fastjson.JSON;
 import com.alibaba.fastjson.parser.ParserConfig;
 import com.alibaba.fastjson.serializer.SerializerFeature;
 import lombok.extern.slf4j.Slf4j;
-import me.zhengjie.utils.StringUtils;
 import org.apache.commons.codec.digest.DigestUtils;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnClass;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean;
@@ -24,11 +38,13 @@ import org.springframework.data.redis.core.RedisOperations;
 import org.springframework.data.redis.core.RedisTemplate;
 import org.springframework.data.redis.serializer.RedisSerializationContext;
 import org.springframework.data.redis.serializer.RedisSerializer;
+import reactor.util.annotation.Nullable;
 import java.nio.charset.Charset;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.HashMap;
 import java.util.Map;
+
 
 /**
  * @author Zheng Jie
@@ -49,7 +65,8 @@ public class RedisConfig extends CachingConfigurerSupport {
     public RedisCacheConfiguration redisCacheConfiguration(){
         FastJsonRedisSerializer<Object> fastJsonRedisSerializer = new FastJsonRedisSerializer<>(Object.class);
         RedisCacheConfiguration configuration = RedisCacheConfiguration.defaultCacheConfig();
-        configuration = configuration.serializeValuesWith(RedisSerializationContext.SerializationPair.fromSerializer(fastJsonRedisSerializer)).entryTtl(Duration.ofHours(2));
+        configuration = configuration.serializeValuesWith(RedisSerializationContext.
+                SerializationPair.fromSerializer(fastJsonRedisSerializer)).entryTtl(Duration.ofHours(2));
         return configuration;
     }
 
@@ -63,10 +80,18 @@ public class RedisConfig extends CachingConfigurerSupport {
         // value值的序列化采用fastJsonRedisSerializer
         template.setValueSerializer(fastJsonRedisSerializer);
         template.setHashValueSerializer(fastJsonRedisSerializer);
-        // 全局开启AutoType，这里方便开发，使用全局的方式
-        ParserConfig.getGlobalInstance().setAutoTypeSupport(true);
-        // 建议使用这种方式，小范围指定白名单
-        // ParserConfig.getGlobalInstance().addAccept("me.zhengjie.domain");
+        // fastjson 升级到 1.2.83 后需要指定序列化白名单
+        ParserConfig.getGlobalInstance().addAccept("me.zhengjie.domain");
+        ParserConfig.getGlobalInstance().addAccept("me.zhengjie.service.dto");
+        // 模块内的实体类
+        ParserConfig.getGlobalInstance().addAccept("me.zhengjie.modules.mnt.domain");
+        ParserConfig.getGlobalInstance().addAccept("me.zhengjie.modules.quartz.domain");
+        ParserConfig.getGlobalInstance().addAccept("me.zhengjie.modules.system.domain");
+        // 模块内的 Dto
+        ParserConfig.getGlobalInstance().addAccept("me.zhengjie.modules.mnt.service.dto");
+        ParserConfig.getGlobalInstance().addAccept("me.zhengjie.modules.quartz.service.dto");
+        ParserConfig.getGlobalInstance().addAccept("me.zhengjie.modules.security.service.dto");
+        ParserConfig.getGlobalInstance().addAccept("me.zhengjie.modules.system.service.dto");
         // key的序列化采用StringRedisSerializer
         template.setKeySerializer(new StringRedisSerializer());
         template.setHashKeySerializer(new StringRedisSerializer());
@@ -81,7 +106,7 @@ public class RedisConfig extends CachingConfigurerSupport {
     @Override
     public KeyGenerator keyGenerator() {
         return (target, method, params) -> {
-            Map<String,Object> container = new HashMap<>(3);
+            Map<String,Object> container = new HashMap<>(8);
             Class<?> targetClassClass = target.getClass();
             // 类地址
             container.put("class",targetClassClass.toGenericString());
@@ -102,6 +127,7 @@ public class RedisConfig extends CachingConfigurerSupport {
 
     @Bean
     @Override
+    @SuppressWarnings({"all"})
     public CacheErrorHandler errorHandler() {
         // 异常处理，当Redis发生异常时，打印日志，但是程序正常走
         log.info("初始化 -> [{}]", "Redis CacheErrorHandler");
@@ -127,7 +153,6 @@ public class RedisConfig extends CachingConfigurerSupport {
             }
         };
     }
-
 }
 
 /**
@@ -136,9 +161,9 @@ public class RedisConfig extends CachingConfigurerSupport {
  * @author /
  * @param <T>
  */
- class FastJsonRedisSerializer<T> implements RedisSerializer<T> {
+class FastJsonRedisSerializer<T> implements RedisSerializer<T> {
 
-    private Class<T> clazz;
+    private final Class<T> clazz;
 
     FastJsonRedisSerializer(Class<T> clazz) {
         super();
@@ -155,7 +180,7 @@ public class RedisConfig extends CachingConfigurerSupport {
 
     @Override
     public T deserialize(byte[] bytes) {
-        if (bytes == null || bytes.length <= 0) {
+        if (bytes == null || bytes.length == 0) {
             return null;
         }
         String str = new String(bytes, StandardCharsets.UTF_8);
@@ -187,13 +212,14 @@ class StringRedisSerializer implements RedisSerializer<Object> {
         return (bytes == null ? null : new String(bytes, charset));
     }
 
-    @Override
-    public byte[] serialize(Object object) {
-        String string = JSON.toJSONString(object);
-        if (StringUtils.isBlank(string)) {
-            return null;
-        }
-        string = string.replace("\"", "");
-        return string.getBytes(charset);
-    }
+	@Override
+	public @Nullable byte[] serialize(Object object) {
+		String string = JSON.toJSONString(object);
+
+		if (org.apache.commons.lang3.StringUtils.isBlank(string)) {
+			return null;
+		}
+		string = string.replace("\"", "");
+		return string.getBytes(charset);
+	}
 }
